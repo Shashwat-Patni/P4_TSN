@@ -1,0 +1,42 @@
+So i tried debugging the Pipeline to see if the packets were actually going to the desired queueus 
+bfrt.tm.counter.queue has watermarks that get assigned if a buffer is used. i can clearly see the watermarks for realtime and normal traffic being different.
+bfrt.tf1.tm> counter.queue.get(pipe=1,pg_id=2,pg_queue=23)
+The pg_queue number is the not local port queue number but the pipe specific global queue number.
+i need to now test why when max rate is enabled and set to 0 does the high prio traffic still go through
+i also need to test if the ingress buffer is being used based on different icos
+i also need to test using a lot of traffic (traffic generation)
+
+
+
+So no, they are NOT going through the same PPG. The moment you mapped icos_7=True to PPG 1, iCoS 7 is pulled out of the DPG and gets its own dedicated ingress buffer accounting.
+You can verify this by checking the DPG:
+pythonbfrt.tf1.tm.port.dpg.get(dev_port=139)
+bfrt.tf1.tm> port.dpg.get(dev_port=139)
+Entry 0:
+Entry key:
+    dev_port                       : 0x0000008B
+Entry data:
+    icos_ppg_map                   : [0, 0, 0, 0, 0, 0, 0, 1]
+    icos_0                         : True
+    icos_1                         : True
+    icos_2                         : True
+    icos_3                         : True
+    icos_4                         : True
+    icos_5                         : True
+    icos_6                         : True
+    icos_7                         : False
+    guaranteed_cells               : 0x00000028
+    hysteresis_cells               : 0x00000020
+    pool_id                        : IG_APP_POOL_0
+    pool_max_cells                 : 0x00000131
+    dynamic_baf                    : 80%
+
+
+
+
+i also need to test if the ingress buffer is being used based on different icos
+
+For this the answer is yes! the ppg and dpg is differentiated for packets!
+
+The packets DO NOT GO through when i turn max rate 0 and maxburst rate 0!! YAY!
+

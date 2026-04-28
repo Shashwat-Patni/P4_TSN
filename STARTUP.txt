@@ -1,0 +1,20 @@
+OK this is my guide to use the switch. 
+
+
+
+Use putty to access the serial console .. bmc boots up...
+use wedge_power.sh on
+use sol.sh
+ubuntu boots up
+
+
+TO SHUTDOWN..
+GO BACK TO BMC 
+do wedge_power.sh off
+do shutdown now
+
+simple enough .. do not use poweroff it shuts off bmc which handles the fans .. 
+
+
+
+one thing we are doing wrong is not grounding the switch

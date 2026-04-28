@@ -1,0 +1,9 @@
+Ok so i need to acesss the table entries 
+first run your p4 code 
+then exit bfshell by typing exit
+
+if u ever want to go back to bfshell there is a script in $SDE PATH
+
+start bfrt_starter.py to start ur server and connect it to the switch port internally now u can acces the server through the bf shell
+
+

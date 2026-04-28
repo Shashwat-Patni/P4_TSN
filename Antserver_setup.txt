@@ -1,0 +1,14 @@
+ok so u have setup the switch 
+u need to access the switch remotely.. without having it connected to the internet
+
+solution? reverse ssh tunnel from the switch to the antserver 
+
+commands@antserver
+ssh f20212909@antserver.csis.bits-goa.ac.in
+
+commands@developer@switch0
+ssh -R 0.0.0.0:9999:localhost:22 -fN f20212909@antserver.csis.bits-goa.ac.in
+
+now u should be able to ssh from the antserver to the switch
+
+ssh -p 9999 developer@localhost

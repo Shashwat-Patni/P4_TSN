@@ -1,0 +1,12 @@
+After booting on the actuall microserver (ubuntu)
+set the SDE PATH variable compile your p4 code (which if u dont have u need to get from the antserver)
+
+once u start running the p4 code script on the switch bf-shell opens up.. setup the ports and most importantly add entries to the bfrt tables for the switch to be able to forward packets
+
+bf shell -> use .. to go back
+	    exit to return to bf shell
+	    ctrl + \ to return to ubuntu
+	    ctrl + x to go back to bmc
+
+
+To populate the tables u will need to use the bfrt runtime
