@@ -112,7 +112,7 @@ cd ~/code/RealTIME
 $SDE_INSTALL/bin/bf-p4c RealTIME.p4
 ```
 
-The compiler targets the TNA architecture and produces a `.tofino/` directory with the compiled binary and the `bfrt.json` schema file describing all tables.
+The compiler targets the TNA architecture.
 
 ---
 
@@ -125,7 +125,6 @@ make
 make install
 ```
 
-This step packages the compiler output into the format `run_switchd.sh` expects under `$SDE_INSTALL`.
 
 ---
 
@@ -201,27 +200,22 @@ PORT | MAC  | D_P | P/PT | SPEED | FEC | AN  | KR  | RDY | ADM | OPR | LPBK | FR
 ```
 # 1. Add the port at the correct speed with FEC setting
 bf-sde.pm> port-add <port_str> <speed> <fec>
-# 2. Set auto-negotiation (2 = off, which is standard for direct connections)
+# 2. Set auto-negotiation
 bf-sde.pm> an-set <port_str> 2
 # 3. Enable the port
 bf-sde.pm> port-enb <port_str>
 ```
 
-The `<port_str>` uses the format `<physical-port>/<lane>`, or `-` as a wildcard for all lanes (e.g., `29/-` means all breakout lanes of port 29). Speeds supported: `1G, 10G, 25G, 40G, 100G, 200G, 400G`. FEC is generally `NONE` for direct-attach cables; use `RS` for 100G optical links.
+The `<port_str>` uses the format `<physical-port>/<lane>`, or `-` as a wildcard for all lanes (e.g., `29/-` means all breakout lanes of port 29). Speeds supported: `1G, 10G, 25G, 40G, 100G, 200G, 400G`. FEC is generally `NONE`.
 
-Example for the ports used in this experiment (100G QSFP, breakout cable):
+Example (port 19):
 
 ```
-bf-sde.pm> port-add 29/- 10G NONE
-bf-sde.pm> an-set 29/- 2
-bf-sde.pm> port-enb 29/-
-bf-sde.pm> port-add 32/- 10G NONE
-bf-sde.pm> an-set 32/- 2
-bf-sde.pm> port-enb 32/-
+bf-sde.pm> port-add 19/- 10G NONE
+bf-sde.pm> an-set 19/- 2
+bf-sde.pm> port-enb 19/-
 bf-sde.pm> show
 ```
-
-After enabling, `ADM` changes to `ENB` and `OPR` becomes `UP` once the cable is connected and the link negotiates.
 
 To enable the internal CPU Ethernet port (port 33, 1G):
 
@@ -497,8 +491,7 @@ bfrt.tf2.tm.queue.sched_cfg.mod(
 )
 ```
 
-Before this command, the scheduling configuration shows `min_priority: LOW` and `min_rate_enable: False`. After this command, the real-time queue is given `HIGH` scheduling priority and the minimum rate guarantee is active. The `dwrr_weight` field continues to govern the weighted round-robin behavior when multiple queues compete at the same priority level.
-
+Before this command, the scheduling configuration shows `min_priority: LOW` and `min_rate_enable: False`. After this command, the real-time queue is given `HIGH` scheduling priority and the minimum rate guarantee is active. 
 ### 1.7 The P4 Program: RealTIME.p4
 
 The P4 program ([RealTIME.p4](RealTIME.p4)) implements the data-plane side of the QoS pipeline. It targets the **TNA (Tofino Native Architecture)** via `tna.p4` and P4_16.
@@ -545,7 +538,7 @@ apply {
 **What this does:**
 1. All IPv4 packets are first forwarded via an LPM table (`ipv4_lpm`) that maps destination addresses to output ports.
 2. Every packet receives a default QoS assignment of `qid=0`, `ingress_cos=0` — placing it in the normal best-effort queue with no special treatment.
-3. The DSCP field is extracted from bits `[7:2]` of the `diffserv` byte (the DSCP occupies the upper 6 bits). If the DSCP value is **46** (the IETF Expedited Forwarding codepoint, RFC 3246), the packet is reclassified to `qid=7` and `ingress_cos=7`, directing it to the highest-priority queue managed by the TM configuration above.
+3. The DSCP field is extracted from bits `[7:2]` of the `diffserv` byte (the DSCP occupies the upper 6 bits). If the DSCP value is **46** (the IETF Expedited Forwarding codepoint), the packet is reclassified to `qid=7` and `ingress_cos=7`, directing it to the highest-priority queue managed by the TM configuration above.
 
 The `ipv4_lpm` table has a default action of `set_output(CPU_PORT)`, sending unknown destinations to the CPU for control-plane learning.
 
@@ -557,15 +550,13 @@ The egress pipeline in this program is intentionally minimal — an empty `Egres
 
 Running the P4 program and configuring the TM as described above, we observed the following:
 
-- **Traffic class separation is effective.** Packets with DSCP EF (46) were consistently steered into queue 7, while all other IPv4 traffic landed in queue 0. Counter reads via the BFRT API confirmed that no EF packet was placed in a non-EF queue and vice versa.
+- **Traffic class separation is effective.** Packets with DSCP EF (46) were steered into queue 7, while all other IPv4 traffic landed in queue 0. Different traffic priority classes can be treated independently using the Traffic Manager.
 
-- **The Traffic Manager enforces differentiated treatment.** When the link was artificially congested by sending bulk traffic at line rate alongside EF traffic, the EF queue was protected by its guaranteed minimum rate (100 Mbps) and its `HIGH` min-priority scheduling. The best-effort queue (queue 0) experienced drops and delays while the real-time queue continued to drain at the configured rate.
+- **The Traffic Manager enforces differentiated treatment.** The EF queue was configured with a guaranteed minimum rate (100 Mbps) and `HIGH` min-priority scheduling, while best-effort traffic used queue 0 with default parameters.
 
-- **Buffer guarantees prevent head-of-line blocking.** With `pool_max_cells=0` on the EF queue, best-effort traffic could not consume the shared egress pool at the expense of real-time packets. The dedicated `guaranteed_cells=20` reservation ensured the EF queue always had space.
+- **Buffer guarantees are configurable per queue.** With `pool_max_cells=0` set via `mod_with_buffer_only` on the EF queue, the queue operates from its dedicated `guaranteed_cells=20` reservation rather than the shared egress pool.
 
-- **The ICoS-to-PPG binding at ingress matters.** Without assigning ICoS 4 to the PPG, PFC (Priority Flow Control) signaling would not have propagated back upstream for that class. While PFC was not the focus of this experiment, the correct ICoS assignment is a prerequisite for any future PFC-based backpressure implementation.
-
-- **The BFRT Python API is the control point.** All TM configuration is runtime-changeable without reloading the P4 program. Queue weights, rate limits, and buffer allocations can be adjusted live, which is essential for adaptive QoS policies.
+- **The BFRT Python API is the control point.** All TM configuration is runtime-changeable without reloading the P4 program. Queue weights, rate limits, and buffer allocations can be adjusted live.
 
 ---
 
@@ -616,7 +607,7 @@ Statistical methods operate exclusively on packet/flow metadata — sizes, timin
 
 Internet traffic is empirically bimodal — "mice" (small control/ACK packets) and "elephants" (near-MTU data packets). This distribution alone provides a coarse but fast classifier.
 
-**TCP flag patterns** — the sequence and frequency of SYN, ACK, FIN, PSH, RST flags — are characteristic of different application behaviors. A VoIP session's flag distribution looks nothing like a bulk file transfer.
+**TCP flag patterns** — the sequence and frequency of SYN, ACK, FIN, PSH, RST flags — are characteristic of different application behaviors.
 
 **Upstream/downstream asymmetry:** Web browsing is highly asymmetric (small HTTP requests, large responses). VoIP and gaming are symmetric. The down-up byte ratio is a strong feature for distinguishing these classes.
 
@@ -628,7 +619,7 @@ IAT — the temporal gap between consecutive packets of a flow — is one of the
 - **Video streaming (adaptive, e.g., DASH/HLS):** Bursts of low-IAT packets during buffer fill, followed by long quiet periods. Bimodal IAT distribution.
 - **Gaming:** Low, consistent IAT (30–60 ms) with jitter spikes during action events.
 - **Web browsing:** Highly variable — bursts during page load, long idle intervals while the user reads.
-- **Bulk file transfer:** Steady stream at the connection's congestion-window-limited rate; IAT tracks the round-trip time.
+- **Bulk file transfer:** Steady stream at the connection's congestion-window-limited rate.
 
 Standard statistical features derived from IAT sequences: mean, median, standard deviation, skew, min/max, and percentiles (p10, p25, p75, p90). The Moore benchmark dataset uses 249 such statistical features. A practical caveat: IAT measurement requires hardware-assisted timestamping; software-timestamped IAT suffers from OS scheduling jitter that degrades classification accuracy.
 
@@ -673,9 +664,6 @@ The fundamental DPI operation is signature matching against payload bytes at kno
 
 - HTTP: ASCII string `GET `, `POST `, or `HEAD ` at offset 0 of the TCP payload.
 - BitTorrent: `\x13BitTorrent protocol` at the start of the handshake.
-- DNS: fixed-format query structure with identifiable opcode and QTYPE fields.
-
-Production DPI engines extend beyond simple string matching to full protocol state machines — they track session state across multiple packets to recognize multi-packet application exchanges.
 
 #### 2.4.2 Cisco NBAR2
 
@@ -729,7 +717,7 @@ No single technique is sufficient on its own. We propose a **two-stage pipeline*
 
 **Stage 1 — DPI / Protocol Decoding (Fast Path):**
 For flows that are not yet fully encrypted (or for which handshake metadata is visible), apply lightweight DPI first:
-- **TLS SNI parsing** (via nDPI or libprotoident): If the SNI is present in the Client Hello, the destination hostname identifies the application with high confidence (e.g., `*.zoom.us`, `*.youtube.com`). This fast path handles a significant fraction of flows.
+- **TLS SNI parsing** (via nDPI or libprotoident): If the SNI is present in the Client Hello, the destination hostname identifies the application with high confidence. This fast path handles a significant fraction of flows.
 - **QUIC CRYPTO frame parsing**: QUIC's initial packet contains the SNI in plaintext; nDPI can extract it.
 - **Port-based pre-filter**: As a zero-cost initial filter, known well-behaved applications (DNS on 53, NTP on 123) are classified immediately without deeper inspection.
 
@@ -742,9 +730,6 @@ For flows where DPI is blind (fully encrypted, ECH, DSCP already stripped), or t
 
 The two stages are complementary: DPI provides high-confidence labels where it can see payload; statistical classification handles the encrypted residual. Combining both stages also enables **cross-validation** — if DPI says Zoom but statistics look like bulk transfer, a flag is raised for further analysis.
 
-#### 2.5.3 Why This Is Tractable on Tofino
-
-The statistical features (first-N packet sizes, IAT summaries) can be computed in the P4 data plane using register arrays and counter primitives, without CPU involvement. The resulting feature vectors are small enough to be classified by a decision tree with a manageable number of stages, which IIsy and Planter have shown can be compiled into P4 match-action tables and run at line rate on Tofino. The DPI fast path (SNI extraction) has precedent in nDPI and in Tofino's flexible parser, which can reach into the TLS Client Hello bytes.
 
 ---
 
