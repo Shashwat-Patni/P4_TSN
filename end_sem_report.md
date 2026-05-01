@@ -546,7 +546,54 @@ The `ipv4_lpm` table has a default action of `set_output(CPU_PORT)`, sending unk
 
 The egress pipeline in this program is intentionally minimal — an empty `Egress` control block and a straightforward deparser that re-emits all parsed headers. All QoS enforcement happens in the Traffic Manager between ingress and egress; no per-packet modification is needed at egress for this use case.
 
-### 1.8 Observations
+### 1.8 Testing with Scapy: Sending Test Traffic
+
+To verify the P4 program and TM configuration, test traffic was generated using Scapy-based Python scripts from a connected host.
+
+#### The Send Script
+
+[send.py](send.py) sends a small burst of UDP packets to the switch. It accepts an optional command-line argument to switch between normal and real-time traffic modes:
+
+```bash
+# Send normal traffic (DSCP = 0)
+python3 send.py
+
+# Send real-time traffic (DSCP EF = 46)
+python3 send.py realtime
+```
+
+The key detail is how DSCP EF is encoded into the IP `tos` field: since DSCP occupies the upper 6 bits of the TOS byte, DSCP 46 maps to `tos = 46 << 2 = 184`. The script constructs a raw Ethernet frame (`Ether() / IP(...) / UDP(...) / Raw(...)`) and sends it directly on the wire via `sendp`, bypassing the host OS routing stack — important when the host is directly cabled to the Tofino port.
+
+#### The Dual-Flow Send Script
+
+[dual_send.py](scapy/dual_send.py) sends two UDP flows simultaneously using Python threads and a `threading.Barrier` to synchronize their start times. The two flows use different source ports (`4001` and `4002`) and send for a configurable duration:
+
+```bash
+python3 dual_send.py <src_ip> <dst_ip> <msg1> <msg2> <interface> <duration_sec>
+```
+
+This is the primary script used to demonstrate queue separation: one flow can be marked with DSCP EF and the other left at DSCP 0, sending simultaneously so the TM's priority scheduling is exercised under concurrent load.
+
+#### The Receive Script
+
+[receive.py](scapy/receive.py) runs on the destination host and uses Scapy to sniff incoming packets on a specified interface. For each received IP packet it prints the source IP, destination IP, raw TOS value, and computed DSCP — and flags any packet with DSCP 46 as real-time. This provides a quick sanity check that the switch is not stripping or rewriting the DSCP markings end-to-end.
+
+#### Forwarding Table Entries
+
+For test traffic to be forwarded through the switch, entries must be added to the `ipv4_lpm` table in the P4 control plane. These are added from the BFShell BFRT Python session while the switch daemon is running:
+
+```python
+# Add a host route for the destination test IP
+bfrt.RealTIME.pipe.Ingress.ipv4_lpm.add_with_set_output(
+    dst_addr="10.0.0.2",
+    prefix_len=32,
+    port=138        # dev_port of the egress interface — cross-reference with pm show
+)
+```
+
+Replace `10.0.0.2` and `prefix_len` with the actual test destination address, and `port` with the `D_P` (dev_port) value shown for the egress interface in `pm show`. Without this entry, the default action sends all packets to the CPU port and no traffic reaches the egress queue being tested.
+
+### 1.9 Observations
 
 Running the P4 program and configuring the TM as described above, we observed the following:
 
